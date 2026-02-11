@@ -1,0 +1,13 @@
+torch
+sentence-transformers
+numpy
+chromadb
+openai
+openai-agents
+langsmith
+litellm
+python-dotenv
+ebooklib
+mobi
+html2text
+PyPDF2
