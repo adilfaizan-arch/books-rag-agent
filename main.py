@@ -38,17 +38,8 @@ def run_interactive_loop(user_id: str):
     print(f"Type 'exit' or 'quit' to end. Happy reading!")
     print(f"{'='*60}\n")
 
-    memory_file = Path(f"memory/{user_id}.json")
-
     while True:
         try:
-            # Fetch user history from memory JSON file
-            history = []
-            if memory_file.exists():
-                with open(memory_file, 'r') as f:
-                    user_data = json.load(f)
-                    history = user_data.get("history", [])
-
             query = input(f"You ({user_id}) > ")
             if query.lower() in ['exit', 'quit']:
                 print("Goodbye!")
@@ -58,7 +49,8 @@ def run_interactive_loop(user_id: str):
                 continue
 
             print("\nThinking...")
-            response = run_query(query, user_id=user_id, history=history)
+            # Session history is automatically managed by SQLiteSession
+            response = run_query(query, user_id=user_id)
             print(f"\nAssistant: {response}\n")
             print("-" * 30)
 

@@ -153,4 +153,3 @@ def search_books_by_author(author_name: str) -> List[Dict]:
         }
         for r in rows
     ]
-

@@ -57,7 +57,7 @@ def metadata_search(author: str = None, title: str = None) -> str:
     return output
 
 @function_tool
-def get_user_persona(user_id: str = "default_user") -> str:
+def get_user_persona(user_id: str) -> str:
     """
     Retrieve the user's recorded interests and past preferences.
     Best for: Tailoring recommendations to the user's taste.

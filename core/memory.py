@@ -1,115 +1,176 @@
-"""Memory layer for tracking user interests and chat history."""
+"""Memory layer for user persona management.
 
-import os
-import json
-import re
+Session history and user personas are both stored in the SDK's session database 
+(memory/sessions/{user_id}.db) for consistency.
+"""
+
+import sqlite3
 from pathlib import Path
-from datetime import datetime
+from typing import List, Dict, Optional
 from langsmith import traceable
-from openai import OpenAI
 from agents import function_tool
 
-MEMORY_DIR = Path("memory")
+# Unified database for all user sessions and personas
+SESSIONS_DB = Path("memory/user_sessions.db")
+SESSIONS_DB.parent.mkdir(parents=True, exist_ok=True)
 
-# Global OpenAI client, initialized lazily
-_openai_client = None
-
-def get_openai_client():
-    """Lazily initialize the OpenAI client."""
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = OpenAI()
-    return _openai_client
-
-@traceable(name="Save Interaction", run_type="tool")
-def save_interaction(user_id: str, query: str, response: str):
-    """Save user interaction and update persona keywords."""
-    if not MEMORY_DIR.exists():
-        MEMORY_DIR.mkdir()
-
-    user_file = MEMORY_DIR / f"{user_id}.json"
+def init_persona_tables():
+    """Ensure persona-related tables exist in the unified session database."""
+    conn = sqlite3.connect(str(SESSIONS_DB))
+    cursor = conn.cursor()
     
-    # Load existing memory
-    if user_file.exists():
-        with open(user_file, 'r') as f:
-            memory = json.load(f)
-    else:
-        memory = {"history": [], "interests": []}
-
-    # Add to history
-    memory["history"].append({
-        "timestamp": datetime.now().isoformat(),
-        "query": query,
-        "response": response
-    })
-
-    # Simple keyword extraction (for interests)
-    # In a real app, you'd use LLM to extract interests
-    # new_interests = extract_interests(query)
-    # for interest in new_interests:
-    #     if interest.lower() not in [i.lower() for i in memory["interests"]]:
-    #         memory["interests"].append(interest)
-
-    # Save memory
-    with open(user_file, 'w') as f:
-        json.dump(memory, f, indent=2)
+    # Create user personas table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_personas (
+            user_id TEXT PRIMARY KEY,
+            interests TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
-    print(f"✓ Interaction saved for {user_id}.")
+    # Create persona updates table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS persona_updates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            update_text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES user_personas (user_id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # Create index for faster persona lookups
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_persona_updates_user_id 
+        ON persona_updates (user_id, created_at DESC)
+    ''')
+    
+    conn.commit()
+    conn.close()
 
-def extract_interests(text: str):
-    """Extract potential interest keywords from text."""
-    # List of common topics in our books
-    topics = ["adventure", "mystery", "love", "science", "horror", "detective", "nature", "travel", "philosophy", "history"]
-    found = []
-    for topic in topics:
-        if re.search(rf"\b{topic}\b", text, re.I):
-            found.append(topic.capitalize())
-    return found
+def get_persona_from_db(user_id: str) -> Optional[Dict]:
+    """Get user persona from the unified session database."""
+    if not SESSIONS_DB.exists():
+        return None
+        
+    init_persona_tables()
+    
+    conn = sqlite3.connect(str(SESSIONS_DB))
+    cursor = conn.cursor()
+    
+    try:
+        # Get interests
+        cursor.execute('SELECT interests FROM user_personas WHERE user_id = ?', (user_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        interests = row[0].split(',') if row[0] else []
+        
+        # Get recent persona updates (last 5)
+        cursor.execute('''
+            SELECT update_text, created_at 
+            FROM persona_updates 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 5
+        ''', (user_id,))
+        
+        updates = cursor.fetchall()
+        return {
+            'user_id': user_id,
+            'interests': interests,
+            'persona_updates': [
+                {'update': update, 'timestamp': timestamp}
+                for update, timestamp in updates
+            ]
+        }
+    finally:
+        conn.close()
+
+def save_persona_update_to_db(user_id: str, update_text: str, new_interests: List[str] = None):
+    """Save a persona update to the unified session database."""
+    init_persona_tables()
+    
+    conn = sqlite3.connect(str(SESSIONS_DB))
+    cursor = conn.cursor()
+    
+    try:
+        # Ensure user exists in personas table
+        cursor.execute('SELECT interests FROM user_personas WHERE user_id = ?', (user_id,))
+        row = cursor.fetchone()
+        
+        if row:
+            # User exists, update interests if provided
+            if new_interests:
+                existing_interests = set(row[0].split(',')) if row[0] else set()
+                existing_interests.update(new_interests)
+                interests_str = ','.join(filter(None, existing_interests))
+                
+                cursor.execute('''
+                    UPDATE user_personas 
+                    SET interests = ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE user_id = ?
+                ''', (interests_str, user_id))
+        else:
+            # Create new user persona
+            interests_str = ','.join(new_interests) if new_interests else ''
+            cursor.execute('''
+                INSERT INTO user_personas (user_id, interests) 
+                VALUES (?, ?)
+            ''', (user_id, interests_str))
+        
+        # Add persona update
+        cursor.execute('''
+            INSERT INTO persona_updates (user_id, update_text) 
+            VALUES (?, ?)
+        ''', (user_id, update_text))
+        
+        conn.commit()
+        print(f"✓ Persona updated in unified session database for {user_id}: {update_text}")
+    finally:
+        conn.close()
 
 @traceable(name="Get User Persona", run_type="tool")
 def get_persona(user_id: str):
-    """Retrieve user interests and persona from memory."""
-    user_file = MEMORY_DIR / f"{user_id}.json"
-    if not user_file.exists():
+    """Retrieve user interests and persona from the session database."""
+    persona_data = get_persona_from_db(user_id)
+    
+    if not persona_data:
         return "New user. No specific interests recorded yet."
     
-    with open(user_file, 'r') as f:
-        memory = json.load(f)
+    # Combine interests and persona updates
+    interests = persona_data.get("interests", [])
+    persona_updates = persona_data.get("persona_updates", [])
     
-    interests = memory.get("interests", [])
-    if not interests:
+    result = []
+    if interests:
+        result.append(f"User is interested in: {', '.join(interests)}")
+    
+    if persona_updates:
+        recent_updates = persona_updates[:5]
+        updates_text = "; ".join([u["update"] for u in recent_updates])
+        result.append(f"Recent preferences: {updates_text}")
+    
+    if not result:
         return "User has interacted but no specific interests identified yet."
     
-    return f"User is interested in: {', '.join(interests)}. Keep these preferences in mind for recommendations."
+    return ". ".join(result) + ". Keep these preferences in mind for recommendations."
 
 @function_tool
-def update_persona(user_id: str, update_text: str):
+def update_persona(user_id: str, update_text: str, interests: List[str] = None):
     """
-    Update the user's persona with new information on the basis of user chat and interations with the agent.
+    Update the user's persona with new information based on user chat and interactions.
+    
+    Args:
+        user_id: Unique user identifier
+        update_text: Description of new user preferences or interests
+        interests: A list of key interest categories identified (e.g., ["Tech", "Philosophy"])
     """
-    if not MEMORY_DIR.exists():
-        MEMORY_DIR.mkdir()
+    # Save to session database directly using interests provided by the agent
+    save_persona_update_to_db(user_id, update_text, interests)
+    
+    return f"Persona updated successfully for {user_id}."
 
-    user_file = MEMORY_DIR / f"{user_id}.json"
-
-    # Load existing memory
-    if user_file.exists():
-        with open(user_file, 'r') as f:
-            memory = json.load(f)
-    else:
-        memory = {"history": [], "interests": []}
-
-    # Append the update text to the persona
-    if "persona_updates" not in memory:
-        memory["persona_updates"] = []
-
-    memory["persona_updates"].append({
-        "timestamp": datetime.now().isoformat(),
-        "update": update_text
-    })
-
-    # Save memory
-    with open(user_file, 'w') as f:
-        json.dump(memory, f, indent=2)
-
-    print(f"✓ Persona updated for {user_id}: {update_text}")
