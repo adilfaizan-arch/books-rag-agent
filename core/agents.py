@@ -71,32 +71,6 @@ def create_session(user_id: str):
     
     return compaction_session
 
-async def inspect_mcp_discovery(agent, mcp_server):
-    """Debug function to show when and how tools are discovered by the SDK."""
-    from agents.run_context import RunContextWrapper
-    from agents.models.openai_responses import Converter
-    
-    print("\n" + "="*60)
-    print("🔍 [SDK MAGIC] DISCOVERING MCP TOOLS...")
-    print("="*60)
-    
-    # 1. Show tools available to the server
-    tools = await mcp_server.list_tools()
-    print(f"Server '{mcp_server.name}' reported {len(tools)} available tools:")
-    for i, tool in enumerate(tools, 1):
-        print(f"  {i}. {tool.name}")
-    
-    # 2. Show the 'Hidden Payload' sent to OpenAI
-    print("\n[SDK MAGIC] Preparing 'Hidden Payload' for OpenAI API...")
-    # We need to wrap the tools into the SDK's internal Tool object first
-    ctx = RunContextWrapper(context=None)
-    all_tools = await agent.get_all_tools(ctx)
-    converted = Converter.convert_tools(all_tools, [])
-    payload = converted.tools
-    
-    print("This is the exact JSON structure injected into EVERY OpenAI request:")
-    print(json.dumps(payload, indent=2))
-    print("="*60 + "\n")
 
 async def run_query(query: str, user_id: str = "default_user"):
     """Run a query through the agent with persistent session management.
@@ -127,9 +101,6 @@ async def run_query(query: str, user_id: str = "default_user"):
     ) as mcp_server:
         agent.mcp_servers = [mcp_server]
         
-        # --- START INSPECTION (MAGIC PROBE) ---
-        await inspect_mcp_discovery(agent, mcp_server)
-        # --- END INSPECTION ---
         
         # Use streaming to intercept tool calls in real-time
         streamed_result = Runner.run_streamed(agent, query, session=session)
