@@ -1,13 +1,5 @@
 openai
 openai-agents
-langsmith
+mcp
 python-dotenv
-chromadb
-sentence-transformers
-torch
 numpy
-PyPDF2
-ebooklib
-mobi
-html2text
-lxml
