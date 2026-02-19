@@ -72,8 +72,10 @@ def create_session(user_id: str):
     
     # Define a custom trigger to compact more frequently (after 5 non-user messages)
     def should_trigger(cache):
-        print("Cache contents:", cache)
-        return len(cache.get("compaction_candidate_items", [])) >= 5
+        items=cache.get("session_items", [])
+        non_user_items=[item for item in items if item.get("role") != "user"]
+        # print("Cache contents:", cache)
+        return len(non_user_items) >= 5
 
     # Wrap with compaction session for automatic conversation summarization
     compaction_session = OpenAIResponsesCompactionSession(

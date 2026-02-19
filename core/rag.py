@@ -41,7 +41,6 @@ def generate_query_embedding(text: str):
 # Configuration
 CHUNK_SIZE_WORDS = 300
 NUM_RANDOM_CHUNKS = 20
-METADATA_WORDS = 150
 TOP_K_INITIAL = 30
 TOP_K_BOOKS = 2
 
@@ -142,10 +141,6 @@ def read_book(path: str) -> str:
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
 
-@traceable(name="Extract Book Metadata", run_type="tool")
-def get_book_metadata(text: str) -> str:
-    """Extract first N words as book summary."""
-    return ' '.join(text.split()[:METADATA_WORDS])
 
 @traceable(name="Create Random Chunks", run_type="tool")
 def create_random_chunks(text: str):
@@ -205,7 +200,6 @@ def index_books(force: bool = False):
             
         print(f"📖 Indexing new book: {book_name} ({os.path.basename(file_path)})")
         text = read_book(file_path)
-        metadata = get_book_metadata(text)
         
         for idx, (chunk, start, end) in enumerate(create_random_chunks(text)):
             all_chunks_data.append({
@@ -214,8 +208,6 @@ def index_books(force: bool = False):
                 'book_name': book_name,
                 'chunk_idx': idx,
                 'chunk_text': chunk,
-                'combined_text': f"[BOOK]: {metadata}\n\n[EXCERPT]: {chunk}",
-                'book_metadata': metadata,
                 'word_start': start,
                 'word_end': end
             })
@@ -232,15 +224,14 @@ def index_books(force: bool = False):
         batch = all_chunks_data[i:i+10]
         collection.add(
             ids=[c['chunk_id'] for c in batch],
-            embeddings=[generate_embedding(c['combined_text']).tolist() for c in batch],
+            embeddings=[generate_embedding(c['chunk_text']).tolist() for c in batch],
             documents=[c['chunk_text'] for c in batch],
             metadatas=[{
                 'book_id': c['book_id'],
                 'book_name': c['book_name'],
                 'chunk_idx': c['chunk_idx'],
                 'word_start': c['word_start'],
-                'word_end': c['word_end'],
-                'book_metadata': c['book_metadata'][:500]
+                'word_end': c['word_end']
             } for c in batch]
         )
         print(f"  {min(i+10, len(all_chunks_data))}/{len(all_chunks_data)}")
